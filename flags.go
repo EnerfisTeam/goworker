@@ -89,6 +89,7 @@ import (
 	"flag"
 	"os"
 	"strings"
+	"time"
 )
 
 // Namespace returns the namespace flag for goworker. You
@@ -106,6 +107,12 @@ func init() {
 	flag.IntVar(&workerSettings.Concurrency, "concurrency", 25, "the maximum number of concurrently executing jobs")
 
 	flag.IntVar(&workerSettings.Connections, "connections", 2, "the maximum number of connections to the Redis database")
+
+	flag.IntVar(&workerSettings.ConnectionRetries, "retries", 5, "number of attempts to connect to Redis master")
+
+	var timeout uint
+	flag.UintVar(&timeout, "timeout", 3000, "Redis connection timeout (ms)")
+	workerSettings.Timeout = time.Duration(timeout) * time.Millisecond
 
 	redisProvider := os.Getenv("REDIS_PROVIDER")
 	var redisEnvURI string

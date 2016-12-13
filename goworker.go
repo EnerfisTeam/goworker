@@ -8,8 +8,11 @@ import (
 
 	"golang.org/x/net/context"
 
+	"fmt"
 	"github.com/cihub/seelog"
+	"github.com/garyburd/redigo/redis"
 	"github.com/youtube/vitess/go/pools"
+	"errors"
 )
 
 var (
@@ -34,6 +37,8 @@ type WorkerSettings struct {
 	ExitOnComplete bool
 	IsStrict       bool
 	UseNumber      bool
+	Timeout        time.Duration
+	ConnectionRetries int
 }
 
 func SetSettings(settings WorkerSettings) {
@@ -59,7 +64,15 @@ func Init() error {
 		}
 		ctx = context.Background()
 
-		pool = newRedisPool(workerSettings.URI, workerSettings.Connections, workerSettings.Connections, time.Minute)
+		pool, err = newRedisPool(
+			workerSettings.URI,
+			workerSettings.Connections,
+			workerSettings.Connections,
+			workerSettings.Timeout,
+		)
+		if err != nil {
+			return err
+		}
 
 		initialized = true
 	}
@@ -70,15 +83,71 @@ func Init() error {
 // connection pool. When using the pool, check in
 // connections as quickly as possible, because holding a
 // connection will cause concurrent worker functions to lock
-// while they wait for an available connection. Expect this
-// API to change drastically.
+// while they wait for an available connection.
+//
+// Because the connection pool holds connections to a specific
+// master, it might go down or become a slave. GetConn checks
+// for it and tries several times
 func GetConn() (*RedisConn, error) {
-	resource, err := pool.Get(ctx)
+	deadConnection := errors.New("Dead connection")
+	slaveConnection := errors.New("Stale connection (to slave, not master)")
+	try := func() (*RedisConn, error) {
+		resource, err := pool.Get(ctx)
+		if err != nil {
+			return nil, err
+		}
 
-	if err != nil {
-		return nil, err
+		conn := resource.(*RedisConn)
+		_, err = conn.Do("ping")
+		if err != nil {
+			pool.Put(nil)
+			return nil, deadConnection
+		}
+
+		role, err := role(conn.Do("role"))
+		if err != nil {
+			return nil, err
+		}
+		if role != "master" {
+			pool.Put(nil)
+			return nil, slaveConnection
+		}
+		return conn, nil
 	}
-	return resource.(*RedisConn), nil
+
+	var conn *RedisConn
+	var err error
+	for i := 0; i < workerSettings.ConnectionRetries; i++ {
+		if conn, err = try(); err == nil {
+			return conn, nil
+		} else if err != slaveConnection && err != deadConnection {
+			return nil, err
+		}
+	}
+
+	return conn, err
+}
+
+func role(reply interface{}, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	switch reply := reply.(type) {
+	case []interface{}:
+		if len(reply) == 0 {
+			return "", fmt.Errorf("redigo: unexpected element type for role (string), got type %T", reply)
+		}
+		result, ok := reply[0].([]byte)
+		if !ok {
+			return "", fmt.Errorf("redigo: unexpected element type for role (string), got type %T", reply[0])
+		}
+		return string(result), nil
+	case nil:
+		return "", redis.ErrNil
+	case redis.Error:
+		return "", reply
+	}
+	return "", fmt.Errorf("redigo: unexpected type for role (string), got type %T", reply)
 }
 
 // PutConn puts a connection back into the connection pool.

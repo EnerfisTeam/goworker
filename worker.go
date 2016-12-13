@@ -130,7 +130,7 @@ func (w *worker) run(job *Job, workerFunc workerFunc) {
 	defer func() {
 		conn, errCon := GetConn()
 		if errCon != nil {
-			logger.Criticalf("Error on getting connection in worker %v", w)
+			logger.Criticalf("Error on getting connection in worker on finish %v", w)
 			return
 		} else {
 			w.finish(conn, job, err)
@@ -140,12 +140,13 @@ func (w *worker) run(job *Job, workerFunc workerFunc) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.New(fmt.Sprint(r))
+			logger.Critical(err)
 		}
 	}()
 
 	conn, err := GetConn()
 	if err != nil {
-		logger.Criticalf("Error on getting connection in worker %v", w)
+		logger.Criticalf("Error on getting connection in worker on start %v", w)
 		return
 	} else {
 		w.start(conn, job)

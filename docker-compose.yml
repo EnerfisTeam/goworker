@@ -1,0 +1,23 @@
+master:
+  build: ./resque
+  expose:
+    - 6379
+
+slave:
+  build: ./resque
+  command: redis-server --slaveof master 6379
+  links:
+    - master
+  expose:
+    - 6379
+
+sentinel:
+  build: ./sentinel
+  environment:
+    - SENTINEL_DOWN_AFTER=1000
+    - SENTINEL_FAILOVER=1000
+  links:
+    - master
+    - slave
+  expose:
+    - 26379
