@@ -9,10 +9,11 @@ import (
 	"github.com/garyburd/redigo/redis"
 	"github.com/youtube/vitess/go/pools"
 	"strings"
+	"fmt"
 )
 
 var (
-	errorInvalidScheme     = errors.New("invalid Redis+Sentinel database URI scheme")
+	errorInvalidScheme = errors.New("invalid Redis+Sentinel database URI scheme")
 	// https://pypi.python.org/pypi/Redis-Sentinel-Url/1.0.0
 	// https://github.com/mp911de/lettuce/wiki/Redis-URI-and-connection-details
 	errorMasterNameMissing = errors.New("master set name missing, use redis+sentinel://pass@host1:port1,host2:port2/master_set_name/db")
@@ -22,16 +23,16 @@ type RedisConn struct {
 	redis.Conn
 }
 
-type Sentinel struct {
-	sent.Sentinel
-	Db       string
-}
-
 func (r *RedisConn) Close() {
 	_ = r.Conn.Close()
 }
 
-func newRedisPool(uriString string, capacity int, maxCapacity int, idleTimeout time.Duration) (*pools.ResourcePool, error) {
+type Sentinel struct {
+	*sent.Sentinel
+	Db string
+}
+
+func newSentinel(uriString string, idleTimeout time.Duration) (*Sentinel, error) {
 	uri, err := url.Parse(uriString)
 	if err != nil {
 		return nil, err
@@ -55,19 +56,20 @@ func newRedisPool(uriString string, capacity int, maxCapacity int, idleTimeout t
 		return nil, errorInvalidScheme
 	}
 
-	sentinel := &Sentinel{
-		Sentinel: sent.Sentinel{
+	return &Sentinel{
+		Sentinel: &sent.Sentinel{
 			Addrs:      hosts,
 			MasterName: masterName,
 			Dial: func(addr string) (redis.Conn, error) {
 				timeout := idleTimeout / 2
-				c, err := redis.DialTimeout("tcp", addr, timeout, timeout, timeout)
-				return c, err
+				return redis.DialTimeout("tcp", addr, timeout, timeout, timeout)
 			},
 		},
-		Db:       db,
-	}
+		Db: db,
+	}, nil
+}
 
+func newRedisPool(sentinel *Sentinel, capacity int, maxCapacity int, idleTimeout time.Duration) (*pools.ResourcePool, error) {
 	return pools.NewResourcePool(
 		newRedisFactory(sentinel, idleTimeout),
 		capacity,
@@ -103,4 +105,26 @@ func redisConnFromURI(sentinel *Sentinel, idleTimeout time.Duration) (*RedisConn
 
 	c := &RedisConn{Conn: conn}
 	return c, nil
+}
+
+func role(reply interface{}, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	switch reply := reply.(type) {
+	case []interface{}:
+		if len(reply) == 0 {
+			return "", fmt.Errorf("redigo: unexpected element type for role (string), got type %T", reply)
+		}
+		result, ok := reply[0].([]byte)
+		if !ok {
+			return "", fmt.Errorf("redigo: unexpected element type for role (string), got type %T", reply[0])
+		}
+		return string(result), nil
+	case nil:
+		return "", redis.ErrNil
+	case redis.Error:
+		return "", reply
+	}
+	return "", fmt.Errorf("redigo: unexpected type for role (string), got type %T", reply)
 }

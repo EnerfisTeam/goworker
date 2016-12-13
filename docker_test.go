@@ -14,6 +14,8 @@ type container struct {
 	image     string
 }
 
+type containerSetup map[string][]container
+
 func dockerComposeUp(t *testing.T) {
 	t.Log("Starting containers")
 	err := exec.Command("docker-compose", "up", "-d").Run()
@@ -30,7 +32,7 @@ func dockerComposeScaleSentinels(t *testing.T) {
 	}
 }
 
-func scanSetup(t *testing.T) map[string][]container {
+func scanSetup(t *testing.T) containerSetup {
 	t.Log("Mapping containers")
 	out, err := exec.Command(
 		"docker",
@@ -42,7 +44,7 @@ func scanSetup(t *testing.T) map[string][]container {
 		t.Fatal(err)
 	}
 
-	schema := map[string][]container{}
+	schema := containerSetup{}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -79,7 +81,7 @@ func scanSetup(t *testing.T) map[string][]container {
 	return schema
 }
 
-func verifySetupSize(setup map[string][]container, t *testing.T) {
+func verifySetupSize(setup containerSetup, t *testing.T) {
 	t.Log("Verifying container setup")
 	for image, count := range map[string]int{
 		"master":   1,
@@ -97,7 +99,7 @@ func verifySetupSize(setup map[string][]container, t *testing.T) {
 	}
 }
 
-func ensureMaster(setup map[string][]container, t *testing.T) {
+func ensureMaster(setup containerSetup, t *testing.T) {
 	t.Log("Verifying that master container serves as Redis master")
 	image, _ := dockerGetMaster(setup, t)
 	if image != "master" {
@@ -114,7 +116,7 @@ func ensureMaster(setup map[string][]container, t *testing.T) {
 	dockerComposeUnpause(setup, t)
 }
 
-func dockerGetMaster(setup map[string][]container, t *testing.T) (string, string) {
+func dockerGetMaster(setup containerSetup, t *testing.T) (string, string) {
 	master := ""
 	for _, sentinel := range setup["sentinel"] {
 		out, err := exec.Command(
@@ -154,7 +156,7 @@ func pauseContainer(container string, t *testing.T) {
 	}
 }
 
-func dockerComposeUnpause(setup map[string][]container, t *testing.T) {
+func dockerComposeUnpause(setup containerSetup, t *testing.T) {
 	t.Log("Unpausing any paused containers")
 	args := []string{"unpause"}
 	for _, containers := range setup {
@@ -167,7 +169,7 @@ func dockerComposeUnpause(setup map[string][]container, t *testing.T) {
 	}
 }
 
-func dockerClearDb(setup map[string][]container, t *testing.T) {
+func dockerClearDb(setup containerSetup, t *testing.T) {
 	t.Log("Clearing Redis")
 	container := setup["master"][0].container
 	if err := exec.Command(

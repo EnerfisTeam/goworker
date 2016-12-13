@@ -8,16 +8,15 @@ import (
 
 	"golang.org/x/net/context"
 
-	"fmt"
-	"github.com/cihub/seelog"
-	"github.com/garyburd/redigo/redis"
-	"github.com/youtube/vitess/go/pools"
 	"errors"
+	"github.com/cihub/seelog"
+	"github.com/youtube/vitess/go/pools"
 )
 
 var (
 	logger      seelog.LoggerInterface
 	pool        *pools.ResourcePool
+	sentinel    *Sentinel
 	ctx         context.Context
 	initMutex   sync.Mutex
 	initialized bool
@@ -26,18 +25,18 @@ var (
 var workerSettings WorkerSettings
 
 type WorkerSettings struct {
-	QueuesString   string
-	Queues         queuesFlag
-	IntervalFloat  float64
-	Interval       intervalFlag
-	Concurrency    int
-	Connections    int
-	URI            string
-	Namespace      string
-	ExitOnComplete bool
-	IsStrict       bool
-	UseNumber      bool
-	Timeout        time.Duration
+	QueuesString      string
+	Queues            queuesFlag
+	IntervalFloat     float64
+	Interval          intervalFlag
+	Concurrency       int
+	Connections       int
+	URI               string
+	Namespace         string
+	ExitOnComplete    bool
+	IsStrict          bool
+	UseNumber         bool
+	Timeout           time.Duration
 	ConnectionRetries int
 }
 
@@ -64,8 +63,24 @@ func Init() error {
 		}
 		ctx = context.Background()
 
-		pool, err = newRedisPool(
+		sentinel, err = newSentinel(
 			workerSettings.URI,
+			workerSettings.Timeout,
+		)
+		if err != nil {
+			return err
+		}
+		go func() {
+			for {
+				if err := sentinel.Discover(); err != nil {
+					logger.Errorf("Sentinel discovery failed with %v", err)
+				}
+				time.Sleep(time.Minute)
+			}
+		}()
+
+		pool, err = newRedisPool(
+			sentinel,
 			workerSettings.Connections,
 			workerSettings.Connections,
 			workerSettings.Timeout,
@@ -103,7 +118,6 @@ func GetConn() (*RedisConn, error) {
 			pool.Put(nil)
 			return nil, deadConnection
 		}
-
 		role, err := role(conn.Do("role"))
 		if err != nil {
 			return nil, err
@@ -126,28 +140,6 @@ func GetConn() (*RedisConn, error) {
 	}
 
 	return conn, err
-}
-
-func role(reply interface{}, err error) (string, error) {
-	if err != nil {
-		return "", err
-	}
-	switch reply := reply.(type) {
-	case []interface{}:
-		if len(reply) == 0 {
-			return "", fmt.Errorf("redigo: unexpected element type for role (string), got type %T", reply)
-		}
-		result, ok := reply[0].([]byte)
-		if !ok {
-			return "", fmt.Errorf("redigo: unexpected element type for role (string), got type %T", reply[0])
-		}
-		return string(result), nil
-	case nil:
-		return "", redis.ErrNil
-	case redis.Error:
-		return "", reply
-	}
-	return "", fmt.Errorf("redigo: unexpected type for role (string), got type %T", reply)
 }
 
 // PutConn puts a connection back into the connection pool.
@@ -174,6 +166,7 @@ func Close() {
 	defer initMutex.Unlock()
 	if initialized {
 		pool.Close()
+		sentinel.Close()
 		initialized = false
 	}
 }

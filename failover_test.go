@@ -3,10 +3,10 @@ package goworker
 import (
 	"encoding/json"
 	"fmt"
-	"testing"
-	"time"
 	"github.com/garyburd/redigo/redis"
 	"reflect"
+	"testing"
+	"time"
 )
 
 const (
@@ -16,6 +16,45 @@ const (
 )
 
 func TestMasterFailover(t *testing.T) {
+	setup, className, testKey, expectedPayloads := setupFailoverTest(t)
+	defer func() {
+		teardownFailoverTest(setup, t)
+	}()
+
+	registerWork(className, testKey, t, func() {
+		pauseContainer(setup["master"][0].container, t)
+	})
+
+	response := readTestKey(testKey, setup, t)
+	compareExpectedJobsToActual(response, expectedPayloads, t)
+}
+
+func TestSentinelFailover(t *testing.T) {
+	setup, className, testKey, expectedPayloads := setupFailoverTest(t)
+	defer func() {
+		teardownFailoverTest(setup, t)
+	}()
+
+	registerWork(className, testKey, t, func() {
+		pauseContainer(setup["master"][0].container, t)
+		pauseContainer(setup["sentinel"][0].container, t)
+		time.Sleep(3 * FailoverTimeout)
+	})
+
+	response := readTestKey(testKey, setup, t)
+	compareExpectedJobsToActual(response, expectedPayloads, t)
+}
+
+
+func setupFailoverTest(t *testing.T) (containerSetup, string, string, []string) {
+	setup := setupFailoverContainers(t)
+	queueName, className, testKey := setupWorkerSettings(setup)
+	expectedPayloads := scheduleJobs(queueName, className, t)
+
+	return setup, className, testKey, expectedPayloads
+}
+
+func setupFailoverContainers(t *testing.T) containerSetup {
 	dockerComposeUp(t)
 	dockerComposeScaleSentinels(t)
 	setup := scanSetup(t)
@@ -23,13 +62,13 @@ func TestMasterFailover(t *testing.T) {
 	dockerComposeUnpause(setup, t)
 	ensureMaster(setup, t)
 	dockerClearDb(setup, t)
-	defer func() {
-		dockerComposeUnpause(setup, t)
-		dockerComposeStop(t)
-	}()
 
+	return setup
+}
+
+func setupWorkerSettings(setup containerSetup) (string, string, string) {
 	// config
-	queueName := "failover_test"
+	queueName := "failover_sentinel"
 	className := "SomeRubyClass"
 	testKey := fmt.Sprintf("test:%v", queueName)
 
@@ -45,6 +84,10 @@ func TestMasterFailover(t *testing.T) {
 	workerSettings.Connections = 1
 	workerSettings.Timeout = FailoverTimeout / 2
 
+	return queueName, className, testKey
+}
+
+func scheduleJobs(queueName, className string, t *testing.T) []string {
 	// schedule a few jobs and store their payload
 	expectedPayloads := []string{}
 	for i := 1; i <= 5; i++ {
@@ -61,15 +104,18 @@ func TestMasterFailover(t *testing.T) {
 		expectedPayloads = append(expectedPayloads, fmt.Sprint(i))
 	}
 
+	return expectedPayloads
+}
+
+func registerWork(className, testKey string, t *testing.T, middleWorker func()) {
 	// register worker
 	Register(className, func(queue string, args ...interface{}) error {
 		// parse int payload
 		val := args[0].(json.Number)
 		int64Val, _ := val.Int64()
 		intVal := int(int64Val)
-
 		// in a separate connection store the payload in Redis under the test key
-		func () {
+		func() {
 			conn, err := GetConn()
 			if err != nil {
 				t.Fatal(err)
@@ -84,9 +130,10 @@ func TestMasterFailover(t *testing.T) {
 			PutConn(conn)
 		}()
 
-		// kill master
+		// kill master to force new connections from the pool and
+		// kill primary sentinel to test auto discovery
 		if intVal == 3 {
-			pauseContainer(setup["master"][0].container, t)
+			middleWorker()
 		}
 
 		return nil
@@ -94,31 +141,41 @@ func TestMasterFailover(t *testing.T) {
 	if err := Work(); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	// check test keys
-	response := func() []string {
-		if err := Init(); err != nil {
-			t.Fatal(err)
-		}
+func readTestKey(testKey string, setup containerSetup, t *testing.T) []string {
+	// reconnect to a running Sentinel
+	workerSettings.URI = fmt.Sprintf(
+		"redis+sentinel://%s:26379/resque",
+		setup["sentinel"][1].address,
+	)
+	if err := Init(); err != nil {
+		t.Fatal(err)
+	}
 
-		conn, err := GetConn()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func(){
-			PutConn(conn)
-			Close()
-		}()
-
-		response, err := redis.Strings(conn.Do("LRANGE", testKey, 0, -1))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return response
+	conn, err := GetConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		PutConn(conn)
+		Close()
 	}()
 
-	// verify that all jobs were processed and the latest master knows about it
-	if !reflect.DeepEqual(response, expectedPayloads) {
-		t.Errorf("Expected jobs %v, got %v", expectedPayloads, response)
+	response, err := redis.Strings(conn.Do("LRANGE", testKey, 0, -1))
+	if err != nil {
+		t.Fatal(err)
 	}
+	return response
+}
+
+func compareExpectedJobsToActual(response, expected []string, t *testing.T) {
+	if !reflect.DeepEqual(response, expected) {
+		t.Errorf("Expected jobs %v, got %v", expected, response)
+	}
+}
+
+func teardownFailoverTest(setup containerSetup, t *testing.T) {
+	dockerComposeUnpause(setup, t)
+	dockerComposeStop(t)
 }
