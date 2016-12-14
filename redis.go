@@ -10,6 +10,7 @@ import (
 	"github.com/youtube/vitess/go/pools"
 	"strings"
 	"fmt"
+	"golang.org/x/net/context"
 )
 
 var (
@@ -28,11 +29,15 @@ func (r *RedisConn) Close() {
 }
 
 type Sentinel struct {
-	*sent.Sentinel
-	Db string
+	sentinel *sent.Sentinel
+	db          string
+	pool        *pools.ResourcePool
+	capacity    int
+	maxCapacity int
+	idleTimeout time.Duration
 }
 
-func newSentinel(uriString string, idleTimeout time.Duration) (*Sentinel, error) {
+func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.Duration) (*Sentinel, error) {
 	uri, err := url.Parse(uriString)
 	if err != nil {
 		return nil, err
@@ -56,47 +61,91 @@ func newSentinel(uriString string, idleTimeout time.Duration) (*Sentinel, error)
 		return nil, errorInvalidScheme
 	}
 
-	return &Sentinel{
-		Sentinel: &sent.Sentinel{
-			Addrs:      hosts,
-			MasterName: masterName,
-			Dial: func(addr string) (redis.Conn, error) {
-				timeout := idleTimeout / 2
-				return redis.DialTimeout("tcp", addr, timeout, timeout, timeout)
-			},
+	sentinel := &sent.Sentinel{
+		Addrs:      hosts,
+		MasterName: masterName,
+		Dial: func(addr string) (redis.Conn, error) {
+			timeout := idleTimeout / 2
+			return redis.DialTimeout("tcp", addr, timeout, timeout, timeout)
 		},
-		Db: db,
+	}
+
+	return &Sentinel{
+		sentinel: sentinel,
+		db: db,
+		capacity: capacity,
+		maxCapacity: maxCapacity,
+		idleTimeout: idleTimeout,
 	}, nil
 }
 
-func newRedisPool(sentinel *Sentinel, capacity int, maxCapacity int, idleTimeout time.Duration) (*pools.ResourcePool, error) {
-	return pools.NewResourcePool(
-		newRedisFactory(sentinel, idleTimeout),
-		capacity,
-		maxCapacity,
-		idleTimeout,
-	), nil
+func (s *Sentinel) getPool() *pools.ResourcePool {
+	if s.pool == nil {
+		s.pool = pools.NewResourcePool(
+			s.newRedisFactory(),
+			s.capacity,
+			s.maxCapacity,
+			s.idleTimeout,
+		)
+	}
+	return s.pool
 }
 
-func newRedisFactory(sentinel *Sentinel, idleTimeout time.Duration) pools.Factory {
+func (s *Sentinel) GetConn(ctx context.Context) (*RedisConn, error) {
+	resource, err := s.getPool().Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn := resource.(*RedisConn)
+	if conn == nil {
+		return nil, errors.New("No connection available")
+	}
+	return conn, nil
+}
+
+func (s *Sentinel) PutConn(conn *RedisConn) {
+	if s.pool == nil {
+		return
+	}
+	s.pool.Put(conn)
+}
+
+func (s *Sentinel) Discover() error {
+	return s.sentinel.Discover()
+}
+
+func (s *Sentinel) Close() {
+	s.sentinel.Close()
+	if s.pool != nil {
+		s.pool.Close()
+	}
+}
+
+func (s *Sentinel) newRedisFactory() pools.Factory {
 	return func() (pools.Resource, error) {
-		return redisConnFromURI(sentinel, idleTimeout)
+		return s.redisConnFromURI()
 	}
 }
 
-func redisConnFromURI(sentinel *Sentinel, idleTimeout time.Duration) (*RedisConn, error) {
-	masterAddr, err := sentinel.MasterAddr()
+func (s *Sentinel) redisConnFromURI() (*RedisConn, error) {
+	masterAddr, err := s.sentinel.MasterAddr()
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := redis.DialTimeout("tcp", masterAddr, idleTimeout, idleTimeout, idleTimeout)
+	conn, err := redis.DialTimeout(
+		"tcp",
+		masterAddr,
+		s.idleTimeout,
+		s.idleTimeout,
+		s.idleTimeout,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	if sentinel.Db != "" {
-		_, err := conn.Do("SELECT", sentinel.Db)
+	if s.db != "" {
+		_, err := conn.Do("SELECT", s.db)
 		if err != nil {
 			conn.Close()
 			return nil, err

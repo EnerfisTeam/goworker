@@ -27,7 +27,7 @@ func TestConnectionString(t *testing.T) {
 			expectedError: nil,
 		},
 	} {
-		_, err := newSentinel(tt.uri, time.Minute)
+		_, err := NewSentinel(tt.uri, 1, 1, time.Minute)
 		if tt.expectedError == nil && err != nil {
 			t.Error(tt.uri, "did not expect an error, got", err)
 		} else if tt.expectedError != err {

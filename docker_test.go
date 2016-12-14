@@ -150,10 +150,13 @@ func dockerGetMaster(setup containerSetup, t *testing.T) (string, string) {
 }
 
 func pauseContainer(container string, t *testing.T) {
+	t.Log("Pausing", container)
 	err := exec.Command("docker", "pause", container).Run()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// wait for failover to happen
+	time.Sleep(time.Second * 10)
 }
 
 func dockerComposeUnpause(setup containerSetup, t *testing.T) {

@@ -10,12 +10,10 @@ import (
 
 	"errors"
 	"github.com/cihub/seelog"
-	"github.com/youtube/vitess/go/pools"
 )
 
 var (
 	logger      seelog.LoggerInterface
-	pool        *pools.ResourcePool
 	sentinel    *Sentinel
 	ctx         context.Context
 	initMutex   sync.Mutex
@@ -63,8 +61,10 @@ func Init() error {
 		}
 		ctx = context.Background()
 
-		sentinel, err = newSentinel(
+		sentinel, err = NewSentinel(
 			workerSettings.URI,
+			workerSettings.Connections,
+			workerSettings.Connections,
 			workerSettings.Timeout,
 		)
 		if err != nil {
@@ -79,12 +79,6 @@ func Init() error {
 			}
 		}()
 
-		pool, err = newRedisPool(
-			sentinel,
-			workerSettings.Connections,
-			workerSettings.Connections,
-			workerSettings.Timeout,
-		)
 		if err != nil {
 			return err
 		}
@@ -97,33 +91,44 @@ func Init() error {
 // GetConn returns a connection from the goworker Redis
 // connection pool. When using the pool, check in
 // connections as quickly as possible, because holding a
-// connection will cause concurrent worker functions to lock
-// while they wait for an available connection.
+// connection will cause concurrent worker functions to
+// lock while they wait for an available connection.
 //
-// Because the connection pool holds connections to a specific
-// master, it might go down or become a slave. GetConn checks
-// for it and tries several times
+// The connection pool holds connections to a specific
+// master which might go down or be demoted to slave. If
+// either happens, the connection is closed and removed
+// from the pool which will provide a brand new connection
+// when asked. GetConn tries to get a new connection
+// several times and only if no attempt succeeds, it
+// returns the error.
 func GetConn() (*RedisConn, error) {
 	deadConnection := errors.New("Dead connection")
 	slaveConnection := errors.New("Stale connection (to slave, not master)")
 	try := func() (*RedisConn, error) {
-		resource, err := pool.Get(ctx)
+		conn, err := sentinel.GetConn(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		conn := resource.(*RedisConn)
+		// close the connection and remove it from the pool so that new
+		// connections get created
+
+		// if the instance does not ping back
 		_, err = conn.Do("ping")
 		if err != nil {
-			pool.Put(nil)
+			conn.Close()
+			PutConn(nil)
 			return nil, deadConnection
 		}
+
+		// or if the instance is not a master anxmore
 		role, err := role(conn.Do("role"))
 		if err != nil {
 			return nil, err
 		}
 		if role != "master" {
-			pool.Put(nil)
+			conn.Close()
+			PutConn(nil)
 			return nil, slaveConnection
 		}
 		return conn, nil
@@ -147,7 +152,7 @@ func GetConn() (*RedisConn, error) {
 // you got from GetConn. Expect this API to change
 // drastically.
 func PutConn(conn *RedisConn) {
-	pool.Put(conn)
+	sentinel.PutConn(conn)
 }
 
 // Close cleans up resources initialized by goworker. This
@@ -165,7 +170,6 @@ func Close() {
 	initMutex.Lock()
 	defer initMutex.Unlock()
 	if initialized {
-		pool.Close()
 		sentinel.Close()
 		initialized = false
 	}
