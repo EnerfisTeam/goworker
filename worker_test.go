@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-	"fmt"
 )
 
 var workerMarshalJSONTests = []struct {
@@ -61,10 +60,7 @@ func TestEnqueue(t *testing.T) {
 		},
 	}
 
-	workerSettings.URI = fmt.Sprintf(
-		"redis+sentinel://%s:26379/resque",
-		setup["sentinel"][0].address,
-	)
+	prepareSentinels(setup)
 	workerSettings.Queues = []string{queueName}
 	workerSettings.UseNumber = true
 	workerSettings.ExitOnComplete = true
@@ -82,6 +78,7 @@ func TestEnqueue(t *testing.T) {
 		actualQueueName = queue
 		return nil
 	})
+
 	if err := Work(); err != nil {
 		t.Errorf("(Enqueue) Failed on work %s", err)
 	}

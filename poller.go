@@ -56,7 +56,8 @@ func (p *poller) poll(interval time.Duration, quit <-chan bool) <-chan *Job {
 
 	conn, err := GetConn()
 	if err != nil {
-		logger.Criticalf("Error on getting connection in poller %s", p)
+		logger.Criticalf("Error on getting connection in poller1 %s", p)
+		logger.Critical(err)
 		close(jobs)
 		return jobs
 	} else {

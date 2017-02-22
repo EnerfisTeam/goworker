@@ -101,19 +101,17 @@ func verifySetupSize(setup containerSetup, t *testing.T) {
 
 func ensureMaster(setup containerSetup, t *testing.T) {
 	t.Log("Verifying that master container serves as Redis master")
-	image, _ := dockerGetMaster(setup, t)
-	if image != "master" {
-		t.Log("Slave container serves as Redis master, forcing failover by pausing slaves")
-		for _, c := range setup["slave"] {
-			pauseContainer(c.container, t)
-		}
-		time.Sleep(3 * FailoverTimeout)
+
+	for i := 0; i < 10; i++ {
 		image, _ := dockerGetMaster(setup, t)
-		if image != "master" {
-			t.Fatal("Master image still not redis master, deal with it yourself")
+		if image == "master" {
+			return
 		}
+		t.Log("Slave container serves as Redis master, forcing failover")
+		forceFailover(setup, t)
 	}
-	dockerComposeUnpause(setup, t)
+
+	t.Fatal("Master image still not redis master, deal with it yourself")
 }
 
 func dockerGetMaster(setup containerSetup, t *testing.T) (string, string) {
@@ -149,14 +147,32 @@ func dockerGetMaster(setup containerSetup, t *testing.T) (string, string) {
 	return "", ""
 }
 
-func pauseContainer(container string, t *testing.T) {
+func forceFailover(setup containerSetup, t *testing.T) {
+	err := exec.Command(
+		"docker",
+		"exec",
+		setup["sentinel"][0].container,
+		"redis-cli",
+		"-p",
+		"26379",
+		"SENTINEL",
+		"failover",
+		MasterSetName,
+	).Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// wait for failover to happen
+	time.Sleep(FailoverTimeout * 3)
+}
+func pauseContainer(container string, wait time.Duration, t *testing.T) {
 	t.Log("Pausing", container)
 	err := exec.Command("docker", "pause", container).Run()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// wait for failover to happen
-	time.Sleep(time.Second * 10)
+	time.Sleep(wait)
 }
 
 func dockerComposeUnpause(setup containerSetup, t *testing.T) {
@@ -167,7 +183,7 @@ func dockerComposeUnpause(setup containerSetup, t *testing.T) {
 			args = append(args, container.container)
 		}
 	}
-	if err := exec.Command("docker", args...).Run(); err != nil && err.Error() != "exit status 1" {
+	if err := exec.Command("docker", args...).Run(); err != nil  && err.Error() != "exit status 1" {
 		t.Fatal(err)
 	}
 }
@@ -180,6 +196,8 @@ func dockerClearDb(setup containerSetup, t *testing.T) {
 		"exec",
 		container,
 		"redis-cli",
+		"-a",
+		Password,
 		"FLUSHALL",
 	).Run(); err != nil {
 		t.Fatal(err)

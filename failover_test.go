@@ -7,12 +7,14 @@ import (
 	"reflect"
 	"testing"
 	"time"
+	"strings"
 )
 
 const (
 	MasterSetName   = "resque"
 	SentinelPort    = 26379
 	FailoverTimeout = 1000 * time.Millisecond
+	Password        = "foobared"
 )
 
 func TestMasterFailover(t *testing.T) {
@@ -22,7 +24,7 @@ func TestMasterFailover(t *testing.T) {
 	}()
 
 	registerWork(className, testKey, t, func() {
-		pauseContainer(setup["master"][0].container, t)
+		pauseContainer(setup["master"][0].container, FailoverTimeout * 3, t)
 	})
 
 	response := readTestKey(testKey, setup, t)
@@ -36,15 +38,13 @@ func TestSentinelFailover(t *testing.T) {
 	}()
 
 	registerWork(className, testKey, t, func() {
-		pauseContainer(setup["master"][0].container, t)
-		pauseContainer(setup["sentinel"][0].container, t)
-		time.Sleep(3 * FailoverTimeout)
+		pauseContainer(setup["master"][0].container, time.Duration(0), t)
+		pauseContainer(setup["sentinel"][0].container, FailoverTimeout * 3, t)
 	})
 
 	response := readTestKey(testKey, setup, t)
 	compareExpectedJobsToActual(response, expectedPayloads, t)
 }
-
 
 func setupFailoverTest(t *testing.T) (containerSetup, string, string, []string) {
 	setup := setupFailoverContainers(t)
@@ -74,7 +74,8 @@ func setupWorkerSettings(setup containerSetup) (string, string, string) {
 
 	// setup worker
 	workerSettings.URI = fmt.Sprintf(
-		"redis+sentinel://%s:26379/resque",
+		"redis+sentinel://%s@%s:26379/resque",
+		Password,
 		setup["sentinel"][0].address,
 	)
 	workerSettings.Queues = []string{queueName}
@@ -144,11 +145,7 @@ func registerWork(className, testKey string, t *testing.T, middleWorker func()) 
 }
 
 func readTestKey(testKey string, setup containerSetup, t *testing.T) []string {
-	// reconnect to a running Sentinel
-	workerSettings.URI = fmt.Sprintf(
-		"redis+sentinel://%s:26379/resque",
-		setup["sentinel"][1].address,
-	)
+	prepareSentinels(setup)
 	if err := Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +166,18 @@ func readTestKey(testKey string, setup containerSetup, t *testing.T) []string {
 	return response
 }
 
+func prepareSentinels(setup containerSetup) {
+	sentinels := []string{}
+	for _, sentinel := range setup["sentinel"] {
+		sentinels = append(sentinels, fmt.Sprintf("%s:26379", sentinel.address))
+	}
+	workerSettings.URI = fmt.Sprintf(
+		"redis+sentinel://%s@%s/resque",
+		Password,
+		strings.Join(sentinels, ","),
+	)
+}
+
 func compareExpectedJobsToActual(response, expected []string, t *testing.T) {
 	if !reflect.DeepEqual(response, expected) {
 		t.Errorf("Expected jobs %v, got %v", expected, response)
@@ -177,5 +186,7 @@ func compareExpectedJobsToActual(response, expected []string, t *testing.T) {
 
 func teardownFailoverTest(setup containerSetup, t *testing.T) {
 	dockerComposeUnpause(setup, t)
+	time.Sleep(time.Second * 3)
+	ensureMaster(setup, t)
 	dockerComposeStop(t)
 }

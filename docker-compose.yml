@@ -1,11 +1,15 @@
 master:
   build: ./resque
+  environment:
+    - REDIS_PASS=foobared
   expose:
     - 6379
 
 slave:
   build: ./resque
-  command: redis-server --slaveof master 6379
+  environment:
+    - REDIS_PASS=foobared
+    - REDIS_SLAVEOF=--slaveof master 6379
   links:
     - master
   expose:
@@ -16,6 +20,8 @@ sentinel:
   environment:
     - SENTINEL_DOWN_AFTER=1000
     - SENTINEL_FAILOVER=1000
+    - SENTINEL_MASTER_NAME=resque
+    - SENTINEL_MASTER_PASS=foobared
   links:
     - master
     - slave

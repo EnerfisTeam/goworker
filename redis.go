@@ -35,6 +35,7 @@ type Sentinel struct {
 	capacity    int
 	maxCapacity int
 	idleTimeout time.Duration
+	password string
 }
 
 func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.Duration) (*Sentinel, error) {
@@ -44,10 +45,13 @@ func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.D
 	}
 
 	var hosts []string
-	var masterName, db string
+	var masterName, db, password string
 
 	switch uri.Scheme {
 	case "redis+sentinel":
+		if uri.User != nil {
+			password = uri.User.String()
+		}
 		hosts = strings.Split(uri.Host, ",")
 		parts := strings.Split(uri.Path, "/")
 		if len(parts) < 2 {
@@ -76,6 +80,7 @@ func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.D
 		capacity: capacity,
 		maxCapacity: maxCapacity,
 		idleTimeout: idleTimeout,
+		password: password,
 	}, nil
 }
 
@@ -123,11 +128,11 @@ func (s *Sentinel) Close() {
 
 func (s *Sentinel) newRedisFactory() pools.Factory {
 	return func() (pools.Resource, error) {
-		return s.redisConnFromURI()
+		return s.redisConn()
 	}
 }
 
-func (s *Sentinel) redisConnFromURI() (*RedisConn, error) {
+func (s *Sentinel) redisConn() (*RedisConn, error) {
 	masterAddr, err := s.sentinel.MasterAddr()
 	if err != nil {
 		return nil, err
@@ -142,6 +147,14 @@ func (s *Sentinel) redisConnFromURI() (*RedisConn, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.password != "" {
+		_, err := conn.Do("AUTH", s.password)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
 	}
 
 	if s.db != "" {
