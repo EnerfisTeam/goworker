@@ -110,9 +110,14 @@ func (s *Sentinel) GetConn(ctx context.Context) (*RedisConn, error) {
 
 func (s *Sentinel) PutConn(conn *RedisConn) {
 	if s.pool == nil {
-		return
+		panic(fmt.Sprintf("Returning connection %v to a closed pool", conn))
 	}
-	s.pool.Put(conn)
+	// nil of type *RedisConn != nil pools.Resource
+	if conn == nil {
+		s.pool.Put(nil)
+	} else {
+		s.pool.Put(conn)
+	}
 }
 
 func (s *Sentinel) Discover() error {
