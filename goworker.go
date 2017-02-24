@@ -10,6 +10,7 @@ import (
 
 	"errors"
 	"github.com/cihub/seelog"
+	"net"
 )
 
 var (
@@ -140,7 +141,9 @@ func GetConn() (*RedisConn, error) {
 		if conn, err = try(); err == nil {
 			return conn, nil
 		} else if err != slaveConnection && err != deadConnection {
-			return nil, err
+			if err, ok := err.(net.Error); ok && !err.Timeout() {
+				return nil, err
+			}
 		}
 	}
 

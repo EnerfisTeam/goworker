@@ -1,11 +1,11 @@
 package goworker
 
 import (
-	"testing"
+	"fmt"
 	"os/exec"
 	"strings"
+	"testing"
 	"time"
-	"fmt"
 )
 
 type container struct {
@@ -183,7 +183,7 @@ func dockerComposeUnpause(setup containerSetup, t *testing.T) {
 			args = append(args, container.container)
 		}
 	}
-	if err := exec.Command("docker", args...).Run(); err != nil  && err.Error() != "exit status 1" {
+	if err := exec.Command("docker", args...).Run(); err != nil && err.Error() != "exit status 1" {
 		t.Fatal(err)
 	}
 }
@@ -210,4 +210,3 @@ func dockerComposeStop(t *testing.T) {
 		exec.Command("docker-compose", "stop").Run()
 	}()
 }
-

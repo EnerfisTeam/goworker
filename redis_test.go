@@ -11,19 +11,19 @@ func TestConnectionString(t *testing.T) {
 		expectedError error
 	}{
 		{
-			uri: "redis://localhost/resque",
+			uri:           "redis://localhost/resque",
 			expectedError: errorInvalidScheme,
 		},
 		{
-			uri: "redis+sentinel://localhost",
+			uri:           "redis+sentinel://localhost",
 			expectedError: errorMasterNameMissing,
 		},
 		{
-			uri: "redis+sentinel://localhost/resque",
+			uri:           "redis+sentinel://localhost/resque",
 			expectedError: nil,
 		},
 		{
-			uri: "redis+sentinel://localhost:26379,otherhost:26379/resque/5",
+			uri:           "redis+sentinel://localhost:26379,otherhost:26379/resque/5",
 			expectedError: nil,
 		},
 	} {
@@ -35,4 +35,3 @@ func TestConnectionString(t *testing.T) {
 		}
 	}
 }
-

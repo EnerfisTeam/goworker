@@ -5,12 +5,12 @@ import (
 	"net/url"
 	"time"
 
+	"fmt"
 	sent "github.com/FZambia/go-sentinel"
 	"github.com/garyburd/redigo/redis"
 	"github.com/youtube/vitess/go/pools"
-	"strings"
-	"fmt"
 	"golang.org/x/net/context"
+	"strings"
 )
 
 var (
@@ -29,13 +29,13 @@ func (r *RedisConn) Close() {
 }
 
 type Sentinel struct {
-	sentinel *sent.Sentinel
+	sentinel    *sent.Sentinel
 	db          string
 	pool        *pools.ResourcePool
 	capacity    int
 	maxCapacity int
 	idleTimeout time.Duration
-	password string
+	password    string
 }
 
 func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.Duration) (*Sentinel, error) {
@@ -75,12 +75,12 @@ func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.D
 	}
 
 	return &Sentinel{
-		sentinel: sentinel,
-		db: db,
-		capacity: capacity,
+		sentinel:    sentinel,
+		db:          db,
+		capacity:    capacity,
 		maxCapacity: maxCapacity,
 		idleTimeout: idleTimeout,
-		password: password,
+		password:    password,
 	}, nil
 }
 

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"github.com/garyburd/redigo/redis"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
-	"strings"
 )
 
 const (
@@ -24,7 +24,7 @@ func TestMasterFailover(t *testing.T) {
 	}()
 
 	registerWork(className, testKey, t, func() {
-		pauseContainer(setup["master"][0].container, FailoverTimeout * 3, t)
+		pauseContainer(setup["master"][0].container, FailoverTimeout*3, t)
 	})
 
 	response := readTestKey(testKey, setup, t)
@@ -39,7 +39,7 @@ func TestSentinelFailover(t *testing.T) {
 
 	registerWork(className, testKey, t, func() {
 		pauseContainer(setup["master"][0].container, time.Duration(0), t)
-		pauseContainer(setup["sentinel"][0].container, FailoverTimeout * 3, t)
+		pauseContainer(setup["sentinel"][0].container, FailoverTimeout*3, t)
 	})
 
 	response := readTestKey(testKey, setup, t)
