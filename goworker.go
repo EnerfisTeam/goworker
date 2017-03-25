@@ -122,7 +122,7 @@ func GetConn() (*RedisConn, error) {
 			return nil, deadConnection
 		}
 
-		// or if the instance is not a master anxmore
+		// or if the instance is not a master anymore
 		role, err := role(conn.Do("role"))
 		if err != nil {
 			return nil, err

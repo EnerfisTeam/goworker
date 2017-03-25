@@ -84,18 +84,6 @@ func NewSentinel(uriString string, capacity, maxCapacity int, idleTimeout time.D
 	}, nil
 }
 
-func (s *Sentinel) getPool() *pools.ResourcePool {
-	if s.pool == nil {
-		s.pool = pools.NewResourcePool(
-			s.newRedisFactory(),
-			s.capacity,
-			s.maxCapacity,
-			s.idleTimeout,
-		)
-	}
-	return s.pool
-}
-
 func (s *Sentinel) GetConn(ctx context.Context) (*RedisConn, error) {
 	resource, err := s.getPool().Get(ctx)
 	if err != nil {
@@ -129,6 +117,18 @@ func (s *Sentinel) Close() {
 	if s.pool != nil {
 		s.pool.Close()
 	}
+}
+
+func (s *Sentinel) getPool() *pools.ResourcePool {
+	if s.pool == nil {
+		s.pool = pools.NewResourcePool(
+			s.newRedisFactory(),
+			s.capacity,
+			s.maxCapacity,
+			s.idleTimeout,
+		)
+	}
+	return s.pool
 }
 
 func (s *Sentinel) newRedisFactory() pools.Factory {
